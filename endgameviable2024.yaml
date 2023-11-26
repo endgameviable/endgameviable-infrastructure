@@ -1,0 +1,265 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Endgame Viable 2024 Next.js AWS Resources
+
+Resources:
+
+  # S3 bucket to hold build artifacts.
+  # Only used during build processes.
+  artifactBucket:
+    Type: "AWS::S3::Bucket"
+
+  # S3 bucket containing user markdown content files.
+  # This bucket is rebuilt when new content is published.
+  markdownBucket:
+    Type: "AWS::S3::Bucket"
+
+  # S3 bucket for generated json data files.
+  # This bucket is rebuilt when new content is published.
+  jsonBucket:
+    Type: "AWS::S3::Bucket"
+
+  # SQS queue for events
+  eventQueue:
+    Type: "AWS::SQS::Queue"
+
+  # DynamoDB table for generated searchable content
+  searchTable:
+    Type: "AWS::DynamoDB::Table"
+    Properties:
+      AttributeDefinitions:
+        - AttributeName: "pagePath"
+          AttributeType: "S"
+      KeySchema:
+        - AttributeName: "pagePath"
+          KeyType: "HASH"
+      BillingMode: PAY_PER_REQUEST
+
+  # Role to access resources at runtime
+  frontEndRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      
+  # Policies to access above resources at runtime
+  frontEndAccess:
+    Type: "AWS::IAM::RolePolicy"
+    Properties:
+      RoleName: !Ref frontEndRole
+      PolicyName: EndgameViableFrontendPolicy
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Action: "s3:Get*"
+            Resource: !GetAtt markdownBucket.Arn
+          - Effect: "Allow"
+            Action: "s3:List*"
+            Resource: !GetAtt markdownBucket.Arn
+          - Effect: "Allow"
+            Action: "s3:Get*"
+            Resource: !GetAtt jsonBucket.Arn
+          - Effect: "Allow"
+            Action: "s3:List*"
+            Resource: !GetAtt jsonBucket.Arn
+          - Effect: "Allow"
+            Action: "dynamodb:Scan"
+            Resource: !GetAtt searchTable.Arn
+          - Effect: "Allow"
+            Action: "sqs:SendMessage"
+            Resource: !GetAtt eventQueue.Arn
+  
+  # Role to access resources at build time
+  buildRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          # Allow EC2 to assume this role
+          - Effect: "Allow"
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+          # Allow CodePipeline to assume this role
+          - Effect: "Allow"
+            Principal:
+              Service:
+                - codepipeline.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+          # Allow CodeBuild to assume this role
+          - Effect: "Allow"
+            Principal:
+              Service:
+                - codebuild.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+
+  # Policies to access above resources at build time
+  buildAccess:
+    Type: "AWS::IAM::RolePolicy"
+    Properties:
+      RoleName: !Ref buildRole
+      PolicyName: endgameViableBuildPolicy
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            # Giving up and allowing everything.
+            # So tedious to fine tune permissions by trial and error.
+            Action: codecommit:*
+            # Content repo ARN stored in AWS Secrets Manager
+            Resource: !Sub '{{resolve:secretsmanager:endgameviable2024-content-repo:SecretString:arn}}'
+          - Effect: Allow
+            # Need allow access so CodeBuild can write CloudWatch logs
+            Action:
+              - logs:CreateLogGroup
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+            Resource: "arn:aws:logs:*:*:*"            
+          - Effect: Allow
+            # Allows CodePipeline to start the builds
+            Action:
+              - codebuild:StartBuild
+              - codebuild:BatchGetBuilds
+            Resource: 
+              - !GetAtt buildMarkdown.Arn
+              - !GetAtt buildJson.Arn
+          - Effect: Allow
+            # Arg tired of trying to find the exact permissions
+            # used by CodePipeline, just allow everything.
+            Action: "s3:*"
+            Resource:
+              - !GetAtt artifactBucket.Arn
+              - !GetAtt markdownBucket.Arn
+              - !GetAtt jsonBucket.Arn
+              # Had to add object access for CodeCommit too
+              - !Sub "arn:aws:s3:::${artifactBucket}/*"
+              - !Sub "arn:aws:s3:::${markdownBucket}/*"
+              - !Sub "arn:aws:s3:::${jsonBucket}/*"
+          - Effect: "Allow"
+            Action: "dynamodb:Write*"
+            Resource: !GetAtt searchTable.Arn
+          - Effect: "Allow"
+            Action: "sqs:SendMessage"
+            Resource: !GetAtt eventQueue.Arn
+
+  buildPipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      RoleArn: !GetAtt buildRole.Arn
+      ArtifactStore:
+        Type: S3
+        Location: !Ref artifactBucket
+      # Weirdly we have to fetch the source repos
+      # in the Pipeline stages, even though we've
+      # configured each build project to pull from
+      # the right source repo. Ugh.
+      # Have to be careful that the right source
+      # repo goes with the right build stage.
+      Stages:
+        - Name: GetSource
+          Actions:
+            - Name: GetMarkdownRepo
+              RunOrder: 1
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Version: 1
+                Provider: CodeCommit
+              Configuration:
+                RepositoryName: endgameviable-content
+                BranchName: main
+              OutputArtifacts:
+                - Name: SourceMarkdownOutput
+            - Name: GetJSONRepo
+              RunOrder: 2
+              ActionTypeId:
+                Category: Source
+                Owner: ThirdParty
+                Version: 1
+                Provider: GitHub
+              Configuration:
+                # Pain in the butt to access github
+                # in CodePipeline
+                Owner: endgameviable
+                Repo: endgameviable-json
+                Branch: main
+                # GitHub Personal Access Token in Secrets Manager
+                OAuthToken: !Sub '{{resolve:secretsmanager:endgameviable2024-github:SecretString:token}}'
+              OutputArtifacts:
+                - Name: SourceJsonOutput
+        - Name: CopyMarkdownToS3
+          Actions:
+            - Name: BuildAction
+              RunOrder: 1
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Version: 1
+                Provider: CodeBuild
+              InputArtifacts:
+                - Name: SourceMarkdownOutput
+              Configuration:
+                ProjectName: !Ref buildMarkdown
+        - Name: HugoBuildJSON
+          Actions:
+            - Name: BuildAction
+              RunOrder: 1
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Version: 1
+                Provider: CodeBuild
+              InputArtifacts:
+                - Name: SourceJsonOutput
+              Configuration:
+                ProjectName: !Ref buildJson
+
+  buildMarkdown:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      ServiceRole: !GetAtt buildRole.Arn
+      Artifacts:
+        Type: S3
+        Location: !Ref artifactBucket
+      Environment:
+        Type: ARM_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/amazonlinux2-aarch64-standard:3.0
+        EnvironmentVariables:
+          - Name: S3_BUCKET_NAME
+            Value: !Ref markdownBucket
+      Source:
+        Type: CODECOMMIT
+        Location: https://git-codecommit.us-east-1.amazonaws.com/v1/repos/endgameviable-content
+
+  buildJson:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      ServiceRole: !GetAtt buildRole.Arn
+      Artifacts:
+        Type: S3
+        Location: !Ref artifactBucket
+      Environment:
+        Type: ARM_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/amazonlinux2-aarch64-standard:3.0
+        EnvironmentVariables:
+          - Name: MARKDOWN_BUCKET_NAME
+            Value: !Ref markdownBucket
+          - Name: JSON_BUCKET_NAME
+            Value: !Ref jsonBucket
+      Source:
+        Type: GITHUB
+        Location: https://github.com/endgameviable/endgameviable-json
