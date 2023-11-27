@@ -2,6 +2,8 @@ Repeatable steps to build endgameviable2024 infrastructure on AWS.
 
 Was originally going to use Terraform but ended up trying a CloudFormation template.
 
+And it turns out this CloudFormation template can be put in the Amplify backend configuration (except I think I have to write it in json instead of yaml).
+
 ```
 # Install aws-cli tools
 brew install awscli
