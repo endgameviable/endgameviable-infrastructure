@@ -6,47 +6,74 @@ Resources:
   # S3 bucket to hold build artifacts.
   # Only used during build processes.
   artifactBucket:
-    Type: "AWS::S3::Bucket"
+    Type: AWS::S3::Bucket
 
   # S3 bucket containing user markdown content files.
   # This bucket is rebuilt when new content is published.
   markdownBucket:
-    Type: "AWS::S3::Bucket"
+    Type: AWS::S3::Bucket
 
   # S3 bucket for generated json data files.
   # This bucket is rebuilt when new content is published.
   jsonBucket:
-    Type: "AWS::S3::Bucket"
+    Type: AWS::S3::Bucket
+
+  # SNS topic for notifications about the build process.
+  buildTopic:
+    Type: AWS::SNS::Topic
+
+  # SNS email subscription for the build topic.
+  # Sends me emails so I know when the build is finished.
+  buildSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn:
+        Ref: buildTopic
+      Protocol: email
+      Endpoint: endgameviable@gmail.com
 
   # SQS queue for events
   eventQueue:
-    Type: "AWS::SQS::Queue"
+    Type: AWS::SQS::Queue
 
   # DynamoDB table for generated searchable content
   searchTable:
-    Type: "AWS::DynamoDB::Table"
+    Type: AWS::DynamoDB::Table
     Properties:
       AttributeDefinitions:
-        - AttributeName: "pagePath"
-          AttributeType: "S"
+        - AttributeName: pagePath
+          AttributeType: S
       KeySchema:
-        - AttributeName: "pagePath"
-          KeyType: "HASH"
+        - AttributeName: pagePath
+          KeyType: HASH
       BillingMode: PAY_PER_REQUEST
+
+  stateTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      AttributeDefinitions:
+        - AttributeName: pagePath
+          AttributeType: S
+      KeySchema:
+        - AttributeName: pagePath
+          KeyType: HASH
+      ProvisionedThroughput:
+        ReadCapacityUnits: 1
+        WriteCapacityUnits: 1
 
   # Role to access resources at runtime
   frontEndRole:
-    Type: "AWS::IAM::Role"
+    Type: AWS::IAM::Role
     Properties:
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
-          - Effect: "Allow"
+          - Effect: Allow
             Principal:
               Service:
                 - ec2.amazonaws.com
             Action:
-              - 'sts:AssumeRole'
+              - sts:AssumeRole
       
   # Policies to access above resources at runtime
   frontEndAccess:
@@ -78,89 +105,135 @@ Resources:
   
   # Role to access resources at build time
   buildRole:
-    Type: "AWS::IAM::Role"
+    Type: AWS::IAM::Role
     Properties:
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
           # Allow EC2 to assume this role
-          - Effect: "Allow"
+          - Effect: Allow
             Principal:
               Service:
                 - ec2.amazonaws.com
             Action:
-              - 'sts:AssumeRole'
+              - sts:AssumeRole
           # Allow CodePipeline to assume this role
-          - Effect: "Allow"
+          - Effect: Allow
             Principal:
               Service:
                 - codepipeline.amazonaws.com
             Action:
-              - 'sts:AssumeRole'
+              - sts:AssumeRole
           # Allow CodeBuild to assume this role
-          - Effect: "Allow"
+          - Effect: Allow
             Principal:
               Service:
                 - codebuild.amazonaws.com
             Action:
-              - 'sts:AssumeRole'
+              - sts:AssumeRole
 
-  # Policies to access above resources at build time
+  # Policies to for buildRole to access resources
   buildAccess:
-    Type: "AWS::IAM::RolePolicy"
+    Type: AWS::IAM::RolePolicy
     Properties:
-      RoleName: !Ref buildRole
-      PolicyName: endgameViableBuildPolicy
+      RoleName:
+        Ref: buildRole
+      PolicyName: endgameViableBuildAccessPolicies
       PolicyDocument:
         Version: "2012-10-17"
         Statement:
+          # Allow CodeCommit to access repos
           - Effect: Allow
             # Giving up and allowing everything.
             # So tedious to fine tune permissions by trial and error.
             Action: codecommit:*
             # Content repo ARN stored in AWS Secrets Manager
-            Resource: !Sub '{{resolve:secretsmanager:endgameviable2024-content-repo:SecretString:arn}}'
+            Resource:
+              Fn::Sub: '{{resolve:secretsmanager:endgameviable2024-content-repo:SecretString:arn}}'
+          # Allow CodeBuild to write CloudWatch logs
           - Effect: Allow
-            # Need allow access so CodeBuild can write CloudWatch logs
             Action:
               - logs:CreateLogGroup
               - logs:CreateLogStream
               - logs:PutLogEvents
-            Resource: "arn:aws:logs:*:*:*"            
+            Resource: arn:aws:logs:*:*:*            
+          # Allows CodePipeline to start the builds
           - Effect: Allow
-            # Allows CodePipeline to start the builds
             Action:
               - codebuild:StartBuild
               - codebuild:BatchGetBuilds
-            Resource: 
-              - !GetAtt buildMarkdown.Arn
-              - !GetAtt buildJson.Arn
-          - Effect: Allow
-            # Arg tired of trying to find the exact permissions
-            # used by CodePipeline, just allow everything.
-            Action: "s3:*"
             Resource:
-              - !GetAtt artifactBucket.Arn
-              - !GetAtt markdownBucket.Arn
-              - !GetAtt jsonBucket.Arn
-              # Had to add object access for CodeCommit too
-              - !Sub "arn:aws:s3:::${artifactBucket}/*"
-              - !Sub "arn:aws:s3:::${markdownBucket}/*"
-              - !Sub "arn:aws:s3:::${jsonBucket}/*"
-          - Effect: "Allow"
-            Action: "dynamodb:Write*"
-            Resource: !GetAtt searchTable.Arn
-          - Effect: "Allow"
-            Action: "sqs:SendMessage"
-            Resource: !GetAtt eventQueue.Arn
+              - Fn::GetAtt:
+                  - buildMarkdown
+                  - Arn
+              - Fn::GetAtt:
+                  - buildJson
+                  - Arn
+              - Fn::GetAtt:
+                  - buildDatabase
+                  - Arn
+          # Allow CodePipeline to use the S3 buckets.
+          # Arg tired of trying to find the exact permissions
+          # used by CodePipeline, just allowing everything.
+          - Effect: Allow
+            Action: s3:*
+            Resource:
+              - Fn::GetAtt:
+                  - artifactBucket
+                  - Arn
+              - Fn::GetAtt:
+                  - markdownBucket
+                  - Arn
+              - Fn::GetAtt:
+                  - jsonBucket
+                  - Arn
+              - Fn::Sub: arn:aws:s3:::${artifactBucket}/*
+              - Fn::Sub: arn:aws:s3:::${markdownBucket}/*
+              - Fn::Sub: arn:aws:s3:::${jsonBucket}/*
+          - Effect: Allow
+            Action:
+              - dynamodb:Write*
+              - dynamodb:BatchWrite*
+            Resource:
+              - Fn::GetAtt:
+                  - searchTable
+                  - Arn
+              - Fn::GetAtt:
+                  - stateTable
+                  - Arn
+          - Effect: Allow
+            Action: sqs:SendMessage
+            Resource:
+              Fn::GetAtt:
+                - eventQueue
+                - Arn
+
+  buildTopicAccessPolicy:
+    Type: AWS::SNS::TopicPolicy
+    Properties:
+      Topics:
+        - Ref: buildTopic
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codestar-notifications.amazonaws.com
+            Action: sns:Publish
+            Resource:
+              Ref: buildTopic
 
   buildPipeline:
     Type: AWS::CodePipeline::Pipeline
     Properties:
-      RoleArn: !GetAtt buildRole.Arn
+      RoleArn:
+        Fn::GetAtt:
+          - buildRole
+          - Arn
       ArtifactStore:
         Type: S3
-        Location: !Ref artifactBucket
+        Location:
+          Ref: artifactBucket
       # Weirdly we have to fetch the source repos
       # in the Pipeline stages, even though we've
       # configured each build project to pull from
@@ -196,9 +269,25 @@ Resources:
                 Repo: endgameviable-json
                 Branch: main
                 # GitHub Personal Access Token in Secrets Manager
-                OAuthToken: !Sub '{{resolve:secretsmanager:endgameviable2024-github:SecretString:token}}'
+                OAuthToken:
+                  Fn::Sub: '{{resolve:secretsmanager:endgameviable2024-github:SecretString:token}}'
               OutputArtifacts:
                 - Name: SourceJsonOutput
+            - Name: GetDBSyncRepo
+              RunOrder: 3
+              ActionTypeId:
+                Category: Source
+                Owner: ThirdParty
+                Version: 1
+                Provider: GitHub
+              Configuration:
+                Owner: endgameviable
+                Repo: endgameviable-dbsync
+                Branch: main
+                OAuthToken:
+                  Fn::Sub: '{{resolve:secretsmanager:endgameviable2024-github:SecretString:token}}'
+              OutputArtifacts:
+                - Name: SourceDBSyncOutput
         - Name: CopyMarkdownToS3
           Actions:
             - Name: BuildAction
@@ -211,7 +300,8 @@ Resources:
               InputArtifacts:
                 - Name: SourceMarkdownOutput
               Configuration:
-                ProjectName: !Ref buildMarkdown
+                ProjectName:
+                  Ref: buildMarkdown
         - Name: HugoBuildJSON
           Actions:
             - Name: BuildAction
@@ -224,22 +314,42 @@ Resources:
               InputArtifacts:
                 - Name: SourceJsonOutput
               Configuration:
-                ProjectName: !Ref buildJson
+                ProjectName:
+                  Ref: buildJson
+        - Name: SyncDatabase
+          Actions:
+            - Name: BuildAction
+              RunOrder: 1
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Version: 1
+                Provider: CodeBuild
+              InputArtifacts:
+                - Name: SourceDBSyncOutput
+              Configuration:
+                ProjectName:
+                  Ref: buildDatabase
 
   buildMarkdown:
     Type: AWS::CodeBuild::Project
     Properties:
-      ServiceRole: !GetAtt buildRole.Arn
+      ServiceRole:
+        Fn::GetAtt:
+          - buildRole
+          - Arn
       Artifacts:
         Type: S3
-        Location: !Ref artifactBucket
+        Location:
+          Ref: artifactBucket
       Environment:
         Type: ARM_CONTAINER
         ComputeType: BUILD_GENERAL1_SMALL
         Image: aws/codebuild/amazonlinux2-aarch64-standard:3.0
         EnvironmentVariables:
           - Name: S3_BUCKET_NAME
-            Value: !Ref markdownBucket
+            Value:
+              Ref: markdownBucket
       Source:
         Type: CODECOMMIT
         Location: https://git-codecommit.us-east-1.amazonaws.com/v1/repos/endgameviable-content
@@ -247,19 +357,86 @@ Resources:
   buildJson:
     Type: AWS::CodeBuild::Project
     Properties:
-      ServiceRole: !GetAtt buildRole.Arn
+      ServiceRole:
+        Fn::GetAtt:
+          - buildRole
+          - Arn
       Artifacts:
         Type: S3
-        Location: !Ref artifactBucket
+        Location:
+          Ref: artifactBucket
       Environment:
         Type: ARM_CONTAINER
         ComputeType: BUILD_GENERAL1_SMALL
         Image: aws/codebuild/amazonlinux2-aarch64-standard:3.0
         EnvironmentVariables:
-          - Name: MARKDOWN_BUCKET_NAME
-            Value: !Ref markdownBucket
-          - Name: JSON_BUCKET_NAME
-            Value: !Ref jsonBucket
+          - Name: EGV_RESOURCE_MARKDOWN_BUCKET
+            Value:
+              Ref: markdownBucket
+          - Name: EGV_RESOURCE_JSON_BUCKET
+            Value:
+              Ref: jsonBucket
       Source:
         Type: GITHUB
         Location: https://github.com/endgameviable/endgameviable-json
+
+  buildDatabase:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      ServiceRole:
+        Fn::GetAtt:
+          - buildRole
+          - Arn
+      Artifacts:
+        Type: S3
+        Location:
+          Ref: artifactBucket
+      Environment:
+        Type: ARM_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/amazonlinux2-aarch64-standard:3.0
+        EnvironmentVariables:
+          - Name: EGV_RESOURCE_JSON_BUCKET
+            Value:
+              Ref: jsonBucket
+          - Name: EGV_RESOURCE_SEARCH_TABLE
+            Value:
+              Ref: searchTable
+      Source:
+        Type: GITHUB
+        Location: https://github.com/endgameviable/endgameviable-dbsync
+
+  buildNotification:
+    Type: AWS::CodeStarNotifications::NotificationRule
+    Properties:
+      Name: buildPipelineStageNotificationRule
+      DetailType: BASIC
+      Resource:
+        Fn::Sub: arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:${buildPipeline}
+      EventTypeIds:
+        - codepipeline-pipeline-pipeline-execution-started
+        - codepipeline-pipeline-stage-execution-started
+        - codepipeline-pipeline-stage-execution-succeeded
+        - codepipeline-pipeline-stage-execution-failed
+      Targets:
+        - TargetType: SNS
+          TargetAddress:
+            Ref: buildTopic
+
+Outputs:
+  ContentBucket:
+    Description: S3 bucket containing JSON data for the blog
+    Value:
+      Ref: markdownBucket
+  JSONBucket:
+    Description: S3 bucket containing JSON data for the blog
+    Value:
+      Ref: jsonBucket
+  SearchTable:
+    Description: Dynamo table for search queries
+    Value:
+      Ref: searchTable
+  StateTable:
+    Description: Dynamo table for metadata
+    Value:
+      Ref: stateTable
