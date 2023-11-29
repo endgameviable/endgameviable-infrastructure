@@ -1,6 +1,16 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: Endgame Viable 2024 Next.js AWS Resources
 
+Parameters:
+  buildNotificationEmail:
+    Description: Email address where content build notifications will be sent
+    Type: String
+    Default: endgameviable@gmail.com
+  contentRepo:
+    Description: CodeCommit Repo containing Markdown content files
+    Type: String
+    Default: endgameviable-content
+
 Resources:
 
   # S3 bucket to hold build artifacts.
@@ -30,7 +40,8 @@ Resources:
       TopicArn:
         Ref: buildTopic
       Protocol: email
-      Endpoint: endgameviable@gmail.com
+      Endpoint: 
+        Fn::Sub: ${buildNotificationEmail}
 
   # SQS queue for events
   eventQueue:
@@ -61,8 +72,8 @@ Resources:
         ReadCapacityUnits: 1
         WriteCapacityUnits: 1
 
-  # Role to access resources at runtime
-  frontEndRole:
+  # Role for Amplify to use as a service
+  amplifyServiceRole:
     Type: AWS::IAM::Role
     Properties:
       AssumeRolePolicyDocument:
@@ -71,38 +82,41 @@ Resources:
           - Effect: Allow
             Principal:
               Service:
-                - ec2.amazonaws.com
+                - amplify.amazonaws.com
             Action:
               - sts:AssumeRole
       
   # Policies to access above resources at runtime
-  frontEndAccess:
+  amplifyServiceAccessPolicies:
     Type: "AWS::IAM::RolePolicy"
     Properties:
-      RoleName: !Ref frontEndRole
+      RoleName:
+        Ref: amplifyServiceRole
       PolicyName: EndgameViableFrontendPolicy
       PolicyDocument:
         Version: "2012-10-17"
         Statement:
-          - Effect: "Allow"
-            Action: "s3:Get*"
-            Resource: !GetAtt markdownBucket.Arn
-          - Effect: "Allow"
-            Action: "s3:List*"
-            Resource: !GetAtt markdownBucket.Arn
-          - Effect: "Allow"
-            Action: "s3:Get*"
-            Resource: !GetAtt jsonBucket.Arn
-          - Effect: "Allow"
-            Action: "s3:List*"
-            Resource: !GetAtt jsonBucket.Arn
-          - Effect: "Allow"
-            Action: "dynamodb:Scan"
-            Resource: !GetAtt searchTable.Arn
-          - Effect: "Allow"
-            Action: "sqs:SendMessage"
-            Resource: !GetAtt eventQueue.Arn
-  
+          - Sid: PushLogs
+            Effect: Allow
+            Action:
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+            Resource: arn:aws:logs:::log-group:/aws/amplify/*:log-stream:*
+          - Sid: CreateLogGroup
+            Effect: Allow
+            Action: logs:CreateLogGroup
+            Resource: arn:aws:logs:::log-group:/aws/amplify/*
+          - Sid: DescribeLogGroups
+            Effect: Allow
+            Action: logs:DescribeLogGroups
+            Resource: arn:aws:logs:::log-group:*
+          # This allows our build script to access the output vars
+          # from our CloudFormation stack:
+          - Sid: DescribeStacks
+            Effect: Allow
+            Action: "cloudformation:DescribeStacks"
+            Resource: "*"
+
   # Role to access resources at build time
   buildRole:
     Type: AWS::IAM::Role
@@ -251,7 +265,8 @@ Resources:
                 Version: 1
                 Provider: CodeCommit
               Configuration:
-                RepositoryName: endgameviable-content
+                RepositoryName:
+                  Fn::Sub: ${contentRepo}
                 BranchName: main
               OutputArtifacts:
                 - Name: SourceMarkdownOutput
@@ -424,19 +439,19 @@ Resources:
             Ref: buildTopic
 
 Outputs:
-  ContentBucket:
-    Description: S3 bucket containing JSON data for the blog
-    Value:
-      Ref: markdownBucket
   JSONBucket:
-    Description: S3 bucket containing JSON data for the blog
+    Description: S3 bucket containing JSON content data
     Value:
       Ref: jsonBucket
   SearchTable:
-    Description: Dynamo table for search queries
+    Description: Dynamo table containing searchable content
     Value:
       Ref: searchTable
   StateTable:
-    Description: Dynamo table for metadata
+    Description: Dynamo table containing dynamic content metadata
     Value:
       Ref: stateTable
+  EventQueue:
+    Description: Event queue for site actions
+    Value:
+      Ref: eventQueue
