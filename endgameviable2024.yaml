@@ -63,10 +63,10 @@ Resources:
     Type: AWS::DynamoDB::Table
     Properties:
       AttributeDefinitions:
-        - AttributeName: postUrl
+        - AttributeName: url
           AttributeType: S
       KeySchema:
-        - AttributeName: postUrl
+        - AttributeName: url
           KeyType: HASH
       ProvisionedThroughput:
         ReadCapacityUnits: 1
