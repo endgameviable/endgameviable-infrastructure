@@ -118,17 +118,17 @@ Resources:
             Action: "cloudformation:DescribeStacks"
             Resource: "*"
           # Allow Amplify build to access our S3 content bucket
-          - Sid: GetS3
-            Effect: Allow
-            Action: 
-              - s3:Get*
-              - s3:Head*
-              - s3:List*
-            Resource:
-              - Fn::GetAtt:
-                  - jsonBucket
-                  - Arn
-              - Fn::Sub: arn:aws:s3:::${jsonBucket}/*
+          # - Sid: GetS3
+          #   Effect: Allow
+          #   Action: 
+          #     - s3:Get*
+          #     - s3:Head*
+          #     - s3:List*
+          #   Resource:
+          #     - Fn::GetAtt:
+          #         - jsonBucket
+          #         - Arn
+          #     - Fn::Sub: arn:aws:s3:::${jsonBucket}/*
 
   # Role to access resources at build time
   buildRole:
