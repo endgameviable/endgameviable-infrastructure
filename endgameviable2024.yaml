@@ -18,11 +18,6 @@ Resources:
   artifactBucket:
     Type: AWS::S3::Bucket
 
-  # S3 bucket containing user markdown content files.
-  # This bucket is rebuilt when new content is published.
-  markdownBucket:
-    Type: AWS::S3::Bucket
-
   # S3 bucket for generated json data files.
   # This bucket is rebuilt when new content is published.
   jsonBucket:
@@ -72,6 +67,12 @@ Resources:
         ReadCapacityUnits: 1
         WriteCapacityUnits: 1
 
+  # TODO: Create an IAM user to access resources,
+  # which the Next.js app can use at runtime.
+  # Has to be a user so we can export credentials.
+  # Unless we can figure out how to pass other kinds
+  # of credentials to the Next.js runtime.
+
   # Role for Amplify to use as a service
   amplifyServiceRole:
     Type: AWS::IAM::Role
@@ -116,6 +117,18 @@ Resources:
             Effect: Allow
             Action: "cloudformation:DescribeStacks"
             Resource: "*"
+          # Allow Amplify build to access our S3 content bucket
+          - Sid: GetS3
+            Effect: Allow
+            Action: 
+              - s3:Get*
+              - s3:Head*
+              - s3:List*
+            Resource:
+              - Fn::GetAtt:
+                  - jsonBucket
+                  - Arn
+              - Fn::Sub: arn:aws:s3:::${jsonBucket}/*
 
   # Role to access resources at build time
   buildRole:
@@ -146,7 +159,7 @@ Resources:
             Action:
               - sts:AssumeRole
 
-  # Policies to for buildRole to access resources
+  # Policies for buildRole to access resources
   buildAccess:
     Type: AWS::IAM::RolePolicy
     Properties:
@@ -178,10 +191,7 @@ Resources:
               - codebuild:BatchGetBuilds
             Resource:
               - Fn::GetAtt:
-                  - buildMarkdown
-                  - Arn
-              - Fn::GetAtt:
-                  - buildJson
+                  - buildContent
                   - Arn
               - Fn::GetAtt:
                   - buildDatabase
@@ -196,13 +206,9 @@ Resources:
                   - artifactBucket
                   - Arn
               - Fn::GetAtt:
-                  - markdownBucket
-                  - Arn
-              - Fn::GetAtt:
                   - jsonBucket
                   - Arn
               - Fn::Sub: arn:aws:s3:::${artifactBucket}/*
-              - Fn::Sub: arn:aws:s3:::${markdownBucket}/*
               - Fn::Sub: arn:aws:s3:::${jsonBucket}/*
           - Effect: Allow
             Action:
@@ -237,6 +243,8 @@ Resources:
             Resource:
               Ref: buildTopic
 
+  # This is a CodePipeline that builds the content data
+  # from Markdown files, which is used by the Next.js application.
   buildPipeline:
     Type: AWS::CodePipeline::Pipeline
     Properties:
@@ -257,7 +265,7 @@ Resources:
       Stages:
         - Name: GetSource
           Actions:
-            - Name: GetMarkdownRepo
+            - Name: ContentRepo
               RunOrder: 1
               ActionTypeId:
                 Category: Source
@@ -269,27 +277,9 @@ Resources:
                   Fn::Sub: ${contentRepo}
                 BranchName: main
               OutputArtifacts:
-                - Name: SourceMarkdownOutput
-            - Name: GetJSONRepo
+                - Name: ContentSource
+            - Name: DBSyncRepo
               RunOrder: 2
-              ActionTypeId:
-                Category: Source
-                Owner: ThirdParty
-                Version: 1
-                Provider: GitHub
-              Configuration:
-                # Pain in the butt to access github
-                # in CodePipeline
-                Owner: endgameviable
-                Repo: endgameviable-json
-                Branch: main
-                # GitHub Personal Access Token in Secrets Manager
-                OAuthToken:
-                  Fn::Sub: '{{resolve:secretsmanager:endgameviable2024-github:SecretString:token}}'
-              OutputArtifacts:
-                - Name: SourceJsonOutput
-            - Name: GetDBSyncRepo
-              RunOrder: 3
               ActionTypeId:
                 Category: Source
                 Owner: ThirdParty
@@ -302,51 +292,48 @@ Resources:
                 OAuthToken:
                   Fn::Sub: '{{resolve:secretsmanager:endgameviable2024-github:SecretString:token}}'
               OutputArtifacts:
-                - Name: SourceDBSyncOutput
-        - Name: CopyMarkdownToS3
+                - Name: DBSyncSource
+        # Use Hugo to turn the Markdown files into JSON
+        - Name: HugoBuildJSONContent
           Actions:
             - Name: BuildAction
-              RunOrder: 1
               ActionTypeId:
                 Category: Build
                 Owner: AWS
                 Version: 1
                 Provider: CodeBuild
-              InputArtifacts:
-                - Name: SourceMarkdownOutput
               Configuration:
                 ProjectName:
-                  Ref: buildMarkdown
-        - Name: HugoBuildJSON
-          Actions:
-            - Name: BuildAction
-              RunOrder: 1
-              ActionTypeId:
-                Category: Build
-                Owner: AWS
-                Version: 1
-                Provider: CodeBuild
+                  Ref: buildContent
               InputArtifacts:
-                - Name: SourceJsonOutput
-              Configuration:
-                ProjectName:
-                  Ref: buildJson
+                - Name: ContentSource
+              # We don't have to copy the json to an s3 bucket,
+              # we can simply pass it on to the next build step
+              # as an output artifact:
+              OutputArtifacts:
+                - Name: JSONContent
+        # Store searchable content in a Dynamo table
         - Name: SyncDatabase
           Actions:
             - Name: BuildAction
-              RunOrder: 1
               ActionTypeId:
                 Category: Build
                 Owner: AWS
                 Version: 1
                 Provider: CodeBuild
-              InputArtifacts:
-                - Name: SourceDBSyncOutput
               Configuration:
+                # Because we specify more than one input artifact,
+                # we have to tell it which is the primary source,
+                # where the build spec will be read.
+                PrimarySource: DBSyncSource
                 ProjectName:
                   Ref: buildDatabase
+              InputArtifacts:
+                - Name: DBSyncSource
+                # Directory is ${CODEBUILD_SRC_DIR_JSONContent}
+                - Name: JSONContent
 
-  buildMarkdown:
+  buildContent:
     Type: AWS::CodeBuild::Project
     Properties:
       ServiceRole:
@@ -354,6 +341,7 @@ Resources:
           - buildRole
           - Arn
       Artifacts:
+        Name: JSONContent
         Type: S3
         Location:
           Ref: artifactBucket
@@ -362,38 +350,12 @@ Resources:
         ComputeType: BUILD_GENERAL1_SMALL
         Image: aws/codebuild/amazonlinux2-aarch64-standard:3.0
         EnvironmentVariables:
-          - Name: S3_BUCKET_NAME
-            Value:
-              Ref: markdownBucket
-      Source:
-        Type: CODECOMMIT
-        Location: https://git-codecommit.us-east-1.amazonaws.com/v1/repos/endgameviable-content
-
-  buildJson:
-    Type: AWS::CodeBuild::Project
-    Properties:
-      ServiceRole:
-        Fn::GetAtt:
-          - buildRole
-          - Arn
-      Artifacts:
-        Type: S3
-        Location:
-          Ref: artifactBucket
-      Environment:
-        Type: ARM_CONTAINER
-        ComputeType: BUILD_GENERAL1_SMALL
-        Image: aws/codebuild/amazonlinux2-aarch64-standard:3.0
-        EnvironmentVariables:
-          - Name: EGV_RESOURCE_MARKDOWN_BUCKET
-            Value:
-              Ref: markdownBucket
           - Name: EGV_RESOURCE_JSON_BUCKET
             Value:
               Ref: jsonBucket
       Source:
-        Type: GITHUB
-        Location: https://github.com/endgameviable/endgameviable-json
+        Type: CODECOMMIT
+        Location: https://git-codecommit.us-east-1.amazonaws.com/v1/repos/endgameviable-content
 
   buildDatabase:
     Type: AWS::CodeBuild::Project
