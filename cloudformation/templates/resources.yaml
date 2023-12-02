@@ -23,6 +23,33 @@ Resources:
   jsonBucket:
     Type: AWS::S3::Bucket
 
+  # S3 bucket for log files.
+  # For things like CloudFront distribution logs,
+  # which we can analyze to aggregate blog page statistics.
+  logBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      # Needed for CloudWatch:
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerPreferred
+
+  # Bucket policy required for CloudWatch to write logs to the bucket
+  logBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket:
+        Ref: logBucket
+      PolicyDocument:
+        Statement:
+          - Sid: AllowCloudWatchLogs
+            Effect: Allow
+            Principal:
+              Service: logs.amazonaws.com
+            Action: s3:PutObject
+            Resource:
+              Fn::Sub: "arn:aws:s3:::${logBucket}/*"
+
   # SNS topic for notifications about the build process.
   buildTopic:
     Type: AWS::SNS::Topic
@@ -89,7 +116,7 @@ Resources:
       
   # Policies to access above resources at runtime
   amplifyServiceAccessPolicies:
-    Type: "AWS::IAM::RolePolicy"
+    Type: AWS::IAM::RolePolicy
     Properties:
       RoleName:
         Ref: amplifyServiceRole

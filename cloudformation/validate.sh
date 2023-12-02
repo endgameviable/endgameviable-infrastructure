@@ -1,1 +1,1 @@
-aws cloudformation validate-template --template-body file://./templates/backend.yaml
+aws cloudformation validate-template --template-body file://./templates/resources.yaml
