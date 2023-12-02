@@ -102,15 +102,18 @@ Resources:
             Action:
               - logs:CreateLogStream
               - logs:PutLogEvents
-            Resource: arn:aws:logs:::log-group:/aws/amplify/*:log-stream:*
+            Resource:
+              Fn::Sub: arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/amplify/*:log-stream:*
           - Sid: CreateLogGroup
             Effect: Allow
             Action: logs:CreateLogGroup
-            Resource: arn:aws:logs:::log-group:/aws/amplify/*
+            Resource:
+              Fn::Sub: arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/amplify/*
           - Sid: DescribeLogGroups
             Effect: Allow
             Action: logs:DescribeLogGroups
-            Resource: arn:aws:logs:::log-group:*
+            Resource: 
+              Fn::Sub: arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:*
           # This allows our build script to access the output vars
           # from our CloudFormation stack:
           - Sid: DescribeStacks
@@ -118,17 +121,17 @@ Resources:
             Action: "cloudformation:DescribeStacks"
             Resource: "*"
           # Allow Amplify build to access our S3 content bucket
-          # - Sid: GetS3
-          #   Effect: Allow
-          #   Action: 
-          #     - s3:Get*
-          #     - s3:Head*
-          #     - s3:List*
-          #   Resource:
-          #     - Fn::GetAtt:
-          #         - jsonBucket
-          #         - Arn
-          #     - Fn::Sub: arn:aws:s3:::${jsonBucket}/*
+          - Sid: S3Get
+            Effect: Allow
+            Action:
+              - s3:Get*
+              - s3:Head* # used by aws s3 cp
+              - s3:List*
+            Resource:
+              - Fn::GetAtt:
+                - jsonBucket
+                - Arn
+              - Fn::Sub: arn:aws:s3:::${jsonBucket}/*
 
   # Role to access resources at build time
   buildRole:
