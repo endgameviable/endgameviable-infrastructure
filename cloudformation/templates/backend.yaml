@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: "2010-09-09"
-Description: Endgame Viable 2024 Next.js AWS Resources
+Description: Endgame Viable 2024 AWS Backend Resources
 
 Parameters:
   buildNotificationEmail:

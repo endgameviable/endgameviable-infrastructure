@@ -1,0 +1,11 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: CloudFront Distribution for Endgame Viable
+
+Parameters:
+  amplifyName:
+    Description: AWS Amplify application domain name
+    Type: String
+
+Resources:
+
+Outputs:

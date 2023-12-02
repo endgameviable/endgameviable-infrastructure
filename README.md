@@ -1,8 +1,13 @@
 Repeatable steps to build endgameviable2024 infrastructure on AWS.
 
-Was originally going to use Terraform but ended up trying a CloudFormation template.
+Was originally going to use Terraform but ended up trying a CloudFormation template. Might still go to terraform someday,
+because then I could (theoretically) build the tech stack on AWS,
+Google Cloud, or Azure.
 
-And it turns out this CloudFormation template can be put in the Amplify backend configuration (except I think I have to write it in json instead of yaml).
+I'm currently using AWS Amplify to host the Next.js application,
+which unfortunately cannot be scripted into a template and has
+to be setup manually. That also means I can't setup the CloudFront
+distribution manually either, because it needs the Amplify domain.
 
 ```
 # Install aws-cli tools
