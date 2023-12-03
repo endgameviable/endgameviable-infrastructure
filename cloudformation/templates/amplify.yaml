@@ -1,0 +1,72 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Endgame Viable resources for Amplify
+
+Parameters:
+  stackGroup:
+    Type: String
+    Description: Unique stack group identifier for these resources
+
+Resources:
+  # TODO: Create an IAM user to access resources,
+  # which the Next.js app can use at runtime.
+  # Has to be a user so we can export credentials.
+  # Unless we can figure out how to pass other kinds
+  # of credentials to the Next.js runtime.
+
+  # Role for Amplify to use as a service
+  amplifyServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - amplify.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      
+  # Policies to access above resources at runtime
+  amplifyServiceAccessPolicies:
+    Type: AWS::IAM::RolePolicy
+    Properties:
+      RoleName:
+        Ref: amplifyServiceRole
+      PolicyName: EndgameViableFrontendPolicy
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: PushLogs
+            Effect: Allow
+            Action:
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+            Resource:
+              Fn::Sub: arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/amplify/*:log-stream:*
+          - Sid: CreateLogGroup
+            Effect: Allow
+            Action: logs:CreateLogGroup
+            Resource:
+              Fn::Sub: arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/amplify/*
+          - Sid: DescribeLogGroups
+            Effect: Allow
+            Action: logs:DescribeLogGroups
+            Resource: 
+              Fn::Sub: arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:*
+          # This allows our build script to access the output vars
+          # from our CloudFormation stack:
+          - Sid: DescribeStacks
+            Effect: Allow
+            Action: "cloudformation:DescribeStacks"
+            Resource: "*"
+          # Allow Amplify build to access our S3 content bucket
+          - Sid: S3Get
+            Effect: Allow
+            Action:
+              - s3:Get*
+              - s3:Head* # used by aws s3 cp
+              - s3:List*
+            Resource:
+              - Fn::ImportValue: arn:aws:s3:::${stackGroup}-${jsonBucket}
+              - Fn::ImportValue: arn:aws:s3:::${stackGroup}-${jsonBucket}/*

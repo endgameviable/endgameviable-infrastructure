@@ -1,0 +1,348 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Content build pipeline resources for Endgame Viable
+
+Parameters:
+  buildNotificationEmail:
+    Description: Email address where content build notifications will be sent
+    Type: String
+    Default: endgameviable@gmail.com
+  contentRepo:
+    Description: CodeCommit Repo containing Markdown content files
+    Type: String
+    Default: endgameviable-content
+
+Resources:
+  # S3 bucket to hold build artifacts.
+  # Only used during build processes.
+  artifactBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName:
+        Fn::Sub: ${AWS::StackName}-buildartifacts
+
+  # S3 bucket for generated json data files.
+  # This bucket is rebuilt when new content is published.
+  jsonBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName:
+        Fn::Sub: ${AWS::StackName}-generated-jsoncontent
+
+  # DynamoDB table for generated searchable content
+  searchTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName:
+        Fn::Sub: ${AWS::StackName}-generated-contentsearch
+      AttributeDefinitions:
+        - AttributeName: pagePath
+          AttributeType: S
+      KeySchema:
+        - AttributeName: pagePath
+          KeyType: HASH
+      BillingMode: PAY_PER_REQUEST
+
+  # SNS topic for notifications about the build process.
+  buildTopic:
+    Type: AWS::SNS::Topic
+
+  # SNS email subscription for the build topic.
+  # Sends me emails so I know when the build is finished.
+  buildSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn:
+        Ref: buildTopic
+      Protocol: email
+      Endpoint: 
+        Fn::Sub: ${buildNotificationEmail}
+
+  # Role to access resources at build time
+  buildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          # Allow EC2 to assume this role
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - sts:AssumeRole
+          # Allow CodePipeline to assume this role
+          - Effect: Allow
+            Principal:
+              Service:
+                - codepipeline.amazonaws.com
+            Action:
+              - sts:AssumeRole
+          # Allow CodeBuild to assume this role
+          - Effect: Allow
+            Principal:
+              Service:
+                - codebuild.amazonaws.com
+            Action:
+              - sts:AssumeRole
+
+  # Policies for buildRole to access resources
+  buildAccess:
+    Type: AWS::IAM::RolePolicy
+    Properties:
+      RoleName:
+        Ref: buildRole
+      PolicyName: endgameViableBuildAccessPolicies
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          # Allow CodeCommit to access repos
+          - Effect: Allow
+            # Giving up and allowing everything.
+            # So tedious to fine tune permissions by trial and error.
+            Action: codecommit:*
+            # Content repo ARN stored in AWS Secrets Manager
+            Resource:
+              Fn::Sub: '{{resolve:secretsmanager:endgameviable2024-content-repo:SecretString:arn}}'
+          # Allow CodeBuild to write CloudWatch logs
+          - Effect: Allow
+            Action:
+              - logs:CreateLogGroup
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+            Resource: arn:aws:logs:*:*:*            
+          # Allows CodePipeline to start the builds
+          - Effect: Allow
+            Action:
+              - codebuild:StartBuild
+              - codebuild:BatchGetBuilds
+            Resource:
+              - Fn::GetAtt:
+                  - buildContent
+                  - Arn
+              - Fn::GetAtt:
+                  - buildDatabase
+                  - Arn
+          # Allow CodePipeline to use the S3 buckets.
+          # Arg tired of trying to find the exact permissions
+          # used by CodePipeline, just allowing everything.
+          - Effect: Allow
+            Action: s3:*
+            Resource:
+              - Fn::GetAtt:
+                - artifactBucket
+                - Arn
+              - Fn::GetAtt:
+                - jsonBucket
+                - Arn
+              - Fn::Sub: arn:aws:s3:::${artifactBucket}/*
+              - Fn::Sub: arn:aws:s3:::${jsonBucket}/*
+          - Effect: Allow
+            Action:
+              - dynamodb:Write*
+              - dynamodb:BatchWrite*
+            Resource:
+              - Fn::ImportValue:
+                  Fn::Sub: ${AWS::StackName}-stateTableArn
+              - Fn::GetAtt:
+                - searchTable
+                - Arn
+          - Effect: Allow
+            Action: sqs:SendMessage
+            Resource:
+              Fn::ImportValue:
+                Fn::Sub: ${AWS::StackName}-eventQueue
+
+  buildTopicAccessPolicy:
+    Type: AWS::SNS::TopicPolicy
+    Properties:
+      Topics:
+        - Ref: buildTopic
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codestar-notifications.amazonaws.com
+            Action: sns:Publish
+            Resource:
+              Ref: buildTopic
+
+  # This is a CodePipeline that builds the content data
+  # from Markdown files, which is used by the Next.js application.
+  buildPipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      RoleArn:
+        Fn::GetAtt:
+          - buildRole
+          - Arn
+      ArtifactStore:
+        Type: S3
+        Location:
+          Ref: artifactBucket
+      # Weirdly we have to fetch the source repos
+      # in the Pipeline stages, even though we've
+      # configured each build project to pull from
+      # the right source repo. Ugh.
+      # Have to be careful that the right source
+      # repo goes with the right build stage.
+      Stages:
+        - Name: GetSource
+          Actions:
+            - Name: ContentRepo
+              RunOrder: 1
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Version: 1
+                Provider: CodeCommit
+              Configuration:
+                RepositoryName:
+                  Fn::Sub: ${contentRepo}
+                BranchName: main
+              OutputArtifacts:
+                - Name: ContentSource
+            - Name: DBSyncRepo
+              RunOrder: 2
+              ActionTypeId:
+                Category: Source
+                Owner: ThirdParty
+                Version: 1
+                Provider: GitHub
+              Configuration:
+                Owner: endgameviable
+                Repo: endgameviable-dbsync
+                Branch: main
+                OAuthToken:
+                  Fn::Sub: '{{resolve:secretsmanager:endgameviable2024-github:SecretString:token}}'
+              OutputArtifacts:
+                - Name: DBSyncSource
+        # Use Hugo to turn the Markdown files into JSON
+        - Name: HugoBuildJSONContent
+          Actions:
+            - Name: BuildAction
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Version: 1
+                Provider: CodeBuild
+              Configuration:
+                ProjectName:
+                  Ref: buildContent
+              InputArtifacts:
+                - Name: ContentSource
+              # We don't have to copy the json to an s3 bucket,
+              # we can simply pass it on to the next build step
+              # as an output artifact:
+              OutputArtifacts:
+                - Name: JSONContent
+        # Store searchable content in a Dynamo table
+        - Name: SyncDatabase
+          Actions:
+            - Name: BuildAction
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Version: 1
+                Provider: CodeBuild
+              Configuration:
+                # Because we specify more than one input artifact,
+                # we have to tell it which is the primary source,
+                # where the build spec will be read.
+                PrimarySource: DBSyncSource
+                ProjectName:
+                  Ref: buildDatabase
+              InputArtifacts:
+                - Name: DBSyncSource
+                # Directory is ${CODEBUILD_SRC_DIR_JSONContent}
+                - Name: JSONContent
+
+  buildContent:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      ServiceRole:
+        Fn::GetAtt:
+          - buildRole
+          - Arn
+      Artifacts:
+        Name: JSONContent
+        Type: S3
+        Location:
+          Ref: artifactBucket
+      Environment:
+        Type: ARM_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/amazonlinux2-aarch64-standard:3.0
+        EnvironmentVariables:
+          - Name: EGV_RESOURCE_JSON_BUCKET
+            Value:
+              Ref: jsonBucket
+      Source:
+        Type: CODECOMMIT
+        Location: https://git-codecommit.us-east-1.amazonaws.com/v1/repos/endgameviable-content
+
+  buildDatabase:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      ServiceRole:
+        Fn::GetAtt:
+          - buildRole
+          - Arn
+      Artifacts:
+        Type: S3
+        Location:
+          Ref: artifactBucket
+      Environment:
+        Type: ARM_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/amazonlinux2-aarch64-standard:3.0
+        EnvironmentVariables:
+          - Name: EGV_RESOURCE_JSON_BUCKET
+            Value:
+              Ref: jsonBucket
+          - Name: EGV_RESOURCE_SEARCH_TABLE
+            Value:
+              Ref: searchTable
+      Source:
+        Type: GITHUB
+        Location: https://github.com/endgameviable/endgameviable-dbsync
+
+  buildNotification:
+    Type: AWS::CodeStarNotifications::NotificationRule
+    Properties:
+      Name: buildPipelineStageNotificationRule
+      DetailType: BASIC
+      Resource:
+        Fn::Sub: arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:${buildPipeline}
+      EventTypeIds:
+        - codepipeline-pipeline-pipeline-execution-succeeded
+      Targets:
+        - TargetType: SNS
+          TargetAddress:
+            Fn::Sub: ${AWS::StackName}-${buildTopic}
+
+Outputs:
+  JSONBucketName:
+    Description: S3 bucket containing JSON content data
+    Value:
+      Ref: jsonBucket
+    Export:
+      Name:
+        Fn::Sub: ${AWS::StackName}-jsonBucket
+  SearchTableName:
+    Description: Dynamo table containing searchable content
+    Value:
+      Ref: searchTable
+    Export:
+      Name:
+        Fn::Sub: ${AWS::StackName}-searchTable
+  SearchTableARN:
+    Description: Search table ARN
+    Value:
+      Fn::GetAtt: 
+        - searchTable
+        - Arn
+    Export:
+      Name:
+        Fn::Sub: ${AWS::StackName}-searchTableArn

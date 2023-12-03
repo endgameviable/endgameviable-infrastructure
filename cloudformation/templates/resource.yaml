@@ -1,0 +1,83 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Endgame Viable 2024 AWS Backend Resources
+
+# TODO: split these into longterm resources and ephemeral build resources
+
+Resources:
+  # S3 bucket for log files.
+  # For things like CloudFront distribution logs,
+  # which we can analyze to aggregate blog page statistics.
+  logBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName:
+        Fn::Sub: ${AWS::StackName}-logs
+      # Needed for CloudWatch:
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerPreferred
+
+  # Bucket policy required for CloudWatch to write logs to the bucket
+  logBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket:
+        Ref: logBucket
+      PolicyDocument:
+        Statement:
+          - Sid: AllowCloudWatchLogs
+            Effect: Allow
+            Principal:
+              Service: logs.amazonaws.com
+            Action: s3:PutObject
+            Resource:
+              Fn::Sub: "arn:aws:s3:::${logBucket}/*"
+
+  # SQS queue for events
+  # TODO: Evaluate if we really need this
+  # Only used for incoming webmentions
+  eventQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName:
+        Fn::Sub: ${AWS::StackName}-events
+
+  stateTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName:
+        Fn::Sub: ${AWS::StackName}-page-metadata
+      AttributeDefinitions:
+        - AttributeName: url
+          AttributeType: S
+      KeySchema:
+        - AttributeName: url
+          KeyType: HASH
+      ProvisionedThroughput:
+        ReadCapacityUnits: 1
+        WriteCapacityUnits: 1
+
+Outputs:
+  StateTable:
+    Description: Dynamo table containing dynamic content metadata
+    Value:
+      Ref: stateTable
+    Export:
+      Name: 
+        Fn::Sub: ${AWS::StackName}-stateTable
+  StateTableARN:
+    Description: Metadata table ARN
+    Value:
+      Fn::GetAtt: 
+        - stateTable
+        - Arn
+    Export:
+      Name: 
+        Fn::Sub: ${AWS::StackName}-stateTableArn
+  EventQueue:
+    Description: Event queue for site actions
+    Value:
+      Ref: eventQueue
+    Export:
+      Name: 
+        Fn::Sub: ${AWS::StackName}-eventQueue
