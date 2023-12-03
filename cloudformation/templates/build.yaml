@@ -2,38 +2,32 @@ AWSTemplateFormatVersion: "2010-09-09"
 Description: Content build pipeline resources for Endgame Viable
 
 Parameters:
+  stackGroup:
+    Description: Unique infrastructure group name (required)
+    Type: String
+  contentRepo:
+    Description: CodeCommit Repo containing Markdown content files (required)
+    Type: String
   buildNotificationEmail:
     Description: Email address where content build notifications will be sent
     Type: String
     Default: endgameviable@gmail.com
-  contentRepo:
-    Description: CodeCommit Repo containing Markdown content files
-    Type: String
-    Default: endgameviable-content
 
 Resources:
   # S3 bucket to hold build artifacts.
   # Only used during build processes.
   artifactBucket:
     Type: AWS::S3::Bucket
-    Properties:
-      BucketName:
-        Fn::Sub: ${AWS::StackName}-buildartifacts
 
   # S3 bucket for generated json data files.
   # This bucket is rebuilt when new content is published.
   jsonBucket:
     Type: AWS::S3::Bucket
-    Properties:
-      BucketName:
-        Fn::Sub: ${AWS::StackName}-generated-jsoncontent
 
   # DynamoDB table for generated searchable content
   searchTable:
     Type: AWS::DynamoDB::Table
     Properties:
-      TableName:
-        Fn::Sub: ${AWS::StackName}-generated-contentsearch
       AttributeDefinitions:
         - AttributeName: pagePath
           AttributeType: S
@@ -143,7 +137,7 @@ Resources:
               - dynamodb:BatchWrite*
             Resource:
               - Fn::ImportValue:
-                  Fn::Sub: ${AWS::StackName}-stateTableArn
+                  Fn::Sub: ${stackGroup}-stateTableArn
               - Fn::GetAtt:
                 - searchTable
                 - Arn
@@ -151,7 +145,7 @@ Resources:
             Action: sqs:SendMessage
             Resource:
               Fn::ImportValue:
-                Fn::Sub: ${AWS::StackName}-eventQueue
+                Fn::Sub: ${stackGroup}-eventQueueArn
 
   buildTopicAccessPolicy:
     Type: AWS::SNS::TopicPolicy
@@ -311,16 +305,18 @@ Resources:
   buildNotification:
     Type: AWS::CodeStarNotifications::NotificationRule
     Properties:
-      Name: buildPipelineStageNotificationRule
+      Name: 
+        Fn::Sub: ${stackGroup}-buildPipelineNotificationRules
       DetailType: BASIC
       Resource:
+        # Can't use Arn for some reason
         Fn::Sub: arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:${buildPipeline}
       EventTypeIds:
         - codepipeline-pipeline-pipeline-execution-succeeded
       Targets:
         - TargetType: SNS
           TargetAddress:
-            Fn::Sub: ${AWS::StackName}-${buildTopic}
+            Ref: buildTopic
 
 Outputs:
   JSONBucketName:
@@ -329,14 +325,14 @@ Outputs:
       Ref: jsonBucket
     Export:
       Name:
-        Fn::Sub: ${AWS::StackName}-jsonBucket
+        Fn::Sub: ${stackGroup}-jsonBucket
   SearchTableName:
     Description: Dynamo table containing searchable content
     Value:
       Ref: searchTable
     Export:
       Name:
-        Fn::Sub: ${AWS::StackName}-searchTable
+        Fn::Sub: ${stackGroup}-searchTable
   SearchTableARN:
     Description: Search table ARN
     Value:
@@ -345,4 +341,4 @@ Outputs:
         - Arn
     Export:
       Name:
-        Fn::Sub: ${AWS::StackName}-searchTableArn
+        Fn::Sub: ${stackGroup}-searchTableArn

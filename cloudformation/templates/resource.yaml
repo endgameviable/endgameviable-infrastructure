@@ -1,7 +1,10 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: Endgame Viable 2024 AWS Backend Resources
 
-# TODO: split these into longterm resources and ephemeral build resources
+Parameters:
+  stackGroup:
+    Description: Unique infrastructure group name
+    Type: String
 
 Resources:
   # S3 bucket for log files.
@@ -64,7 +67,7 @@ Outputs:
       Ref: stateTable
     Export:
       Name: 
-        Fn::Sub: ${AWS::StackName}-stateTable
+        Fn::Sub: ${stackGroup}-stateTable
   StateTableARN:
     Description: Metadata table ARN
     Value:
@@ -73,11 +76,20 @@ Outputs:
         - Arn
     Export:
       Name: 
-        Fn::Sub: ${AWS::StackName}-stateTableArn
+        Fn::Sub: ${stackGroup}-stateTableArn
   EventQueue:
     Description: Event queue for site actions
     Value:
       Ref: eventQueue
     Export:
       Name: 
-        Fn::Sub: ${AWS::StackName}-eventQueue
+        Fn::Sub: ${stackGroup}-eventQueue
+  EventQueueARN:
+    Description: Event queue ARN
+    Value:
+      Fn::GetAtt:
+        - eventQueue
+        - Arn
+    Export:
+      Name: 
+        Fn::Sub: ${stackGroup}-eventQueueArn
