@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: "2010-09-09"
-Description: Content build pipeline resources for Endgame Viable
+Description: Endgame Viable resources for content build pipeline
 
 Parameters:
   stackGroup:

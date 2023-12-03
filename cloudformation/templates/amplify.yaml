@@ -3,13 +3,12 @@ Description: Endgame Viable resources for Amplify
 
 Parameters:
   stackGroup:
+    Description: Unique infrastructure group name (required)
     Type: String
-    Description: Unique stack group identifier for these resources
 
 Resources:
-  # TODO: Create an IAM user to access resources,
-  # which the Next.js app can use at runtime.
-  # Has to be a user so we can export credentials.
+  # TODO: Create an IAM user to read resources at runtime.
+  # Has to be an IAM user so we can export credentials.
   # Unless we can figure out how to pass other kinds
   # of credentials to the Next.js runtime.
 
@@ -59,7 +58,8 @@ Resources:
           - Sid: DescribeStacks
             Effect: Allow
             Action: "cloudformation:DescribeStacks"
-            Resource: "*"
+            Resource:
+              Fn::Sub: arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${stackGroup}*
           # Allow Amplify build to access our S3 content bucket
           - Sid: S3Get
             Effect: Allow
@@ -68,5 +68,14 @@ Resources:
               - s3:Head* # used by aws s3 cp
               - s3:List*
             Resource:
-              - Fn::ImportValue: arn:aws:s3:::${stackGroup}-${jsonBucket}
-              - Fn::ImportValue: arn:aws:s3:::${stackGroup}-${jsonBucket}/*
+              # whew, weird syntax for this
+              - Fn::Sub:
+                - arn:aws:s3:::${importedBucketName}
+                - importedBucketName:
+                    Fn::ImportValue:
+                      Fn::Sub: ${stackGroup}-jsonBucket
+              - Fn::Sub:
+                - arn:aws:s3:::${importedBucketName}/*
+                - importedBucketName:
+                    Fn::ImportValue:
+                      Fn::Sub: ${stackGroup}-jsonBucket

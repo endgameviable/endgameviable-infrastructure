@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: "2010-09-09"
-Description: Endgame Viable 2024 AWS Backend Resources
+Description: Endgame Viable long-term storage and services
 
 Parameters:
   stackGroup:
