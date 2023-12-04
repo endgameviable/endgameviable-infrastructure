@@ -8,6 +8,10 @@ Parameters:
   contentRepo:
     Description: CodeCommit Repo containing Markdown content files (required)
     Type: String
+  themeRepo:
+    Description: CodeCommit Repo containing Hugo JSONify theme
+    Type: String
+    Default: endgameviable-json-theme
   buildNotificationEmail:
     Description: Email address where content build notifications will be sent
     Type: String
@@ -197,8 +201,27 @@ Resources:
                 BranchName: main
               OutputArtifacts:
                 - Name: ContentSource
-            - Name: DBSyncRepo
+            - Name: ThemeRepo
+              # This is here mainly to trigger a rebuild
+              # if the hugo theme changes
+              # TODO: incorporate output artifacts into build
               RunOrder: 2
+              ActionTypeId:
+                Category: Source
+                Owner: ThirdParty
+                Version: 1
+                Provider: GitHub
+              Configuration:
+                Owner: endgameviable
+                Repo:
+                  Fn::Sub: ${themeRepo}
+                Branch: main
+                OAuthToken:
+                  Fn::Sub: '{{resolve:secretsmanager:endgameviable2024-github:SecretString:token}}'
+              OutputArtifacts:
+                - Name: ThemeSource
+            - Name: DBSyncRepo
+              RunOrder: 3
               ActionTypeId:
                 Category: Source
                 Owner: ThirdParty
@@ -222,10 +245,13 @@ Resources:
                 Version: 1
                 Provider: CodeBuild
               Configuration:
+                PrimarySource: ContentSource
                 ProjectName:
                   Ref: buildContent
               InputArtifacts:
                 - Name: ContentSource
+                # Directory is ${CODEBUILD_SRC_DIR_ThemeSource}
+                - Name: ThemeSource
               # We don't have to copy the json to an s3 bucket,
               # we can simply pass it on to the next build step
               # as an output artifact:

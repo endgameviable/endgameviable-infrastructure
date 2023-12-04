@@ -57,7 +57,7 @@ updateamplify:
 	$(UPDATE) $(AMPLIFYNAME) $(AMPLIFYBODY) $(AMPLIFYPARAMS) $(PROFILE) --parameters $(STACKPARAMS)
 	aws cloudformation wait stack-update-complete $(AMPLIFYNAME)
 updatebuild:
-	$(UPDATE) $(BUILDNAME) $(BUILDBODY) $(BUILDBODY) $(PROFILE) --parameters $(STACKPARAMS) ParameterKey=contentRepo,ParameterValue=endgameviable-content
+	$(UPDATE) $(BUILDNAME) $(BUILDBODY) $(BUILDPARAMS) $(PROFILE) --parameters $(STACKPARAMS) ParameterKey=contentRepo,ParameterValue=endgameviable-content
 	aws cloudformation wait stack-update-complete $(BUILDNAME)
 
 DELETE=aws cloudformation delete-stack
