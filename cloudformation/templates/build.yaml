@@ -8,10 +8,22 @@ Parameters:
   contentRepo:
     Description: CodeCommit Repo containing Markdown content files (required)
     Type: String
-  themeRepo:
-    Description: CodeCommit Repo containing Hugo JSONify theme
+  themeGitHubUser:
+    Description: GitHub user
+    Type: String
+    Default: endgameviable
+  themeGitHubRepo:
+    Description: GitHub Repo containing Hugo JSONify theme
     Type: String
     Default: endgameviable-json-theme
+  dbsyncGitHubUser:
+    Description: GitHub user
+    Type: String
+    Default: endgameviable
+  dbsyncGitHubRepo:
+    Description: GitHub Repo for content database sync
+    Type: String
+    Default: endgameviable-dbsync
   buildNotificationEmail:
     Description: Email address where content build notifications will be sent
     Type: String
@@ -116,6 +128,9 @@ Resources:
               - codebuild:BatchGetBuilds
             Resource:
               - Fn::GetAtt:
+                  - buildTheme
+                  - Arn
+              - Fn::GetAtt:
                   - buildContent
                   - Arn
               - Fn::GetAtt:
@@ -212,9 +227,10 @@ Resources:
                 Version: 1
                 Provider: GitHub
               Configuration:
-                Owner: endgameviable
+                Owner: 
+                  Fn::Sub: ${themeGitHubUser}
                 Repo:
-                  Fn::Sub: ${themeRepo}
+                  Fn::Sub: ${themeGitHubRepo}
                 Branch: main
                 OAuthToken:
                   Fn::Sub: '{{resolve:secretsmanager:endgameviable2024-github:SecretString:token}}'
@@ -228,13 +244,31 @@ Resources:
                 Version: 1
                 Provider: GitHub
               Configuration:
-                Owner: endgameviable
-                Repo: endgameviable-dbsync
+                Owner:
+                  Fn::Sub: ${dbsyncGitHubUser}
+                Repo:
+                  Fn::Sub: ${dbsyncGitHubRepo}
                 Branch: main
                 OAuthToken:
                   Fn::Sub: '{{resolve:secretsmanager:endgameviable2024-github:SecretString:token}}'
               OutputArtifacts:
                 - Name: DBSyncSource
+        # Just passes the theme on to the next build step
+        - Name: PrepareTheme
+          Actions:
+            - Name: BuildAction
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Version: 1
+                Provider: CodeBuild
+              Configuration:
+                ProjectName:
+                  Ref: buildTheme
+              InputArtifacts:
+                - Name: ThemeSource
+              OutputArtifacts:
+                - Name: Theme
         # Use Hugo to turn the Markdown files into JSON
         - Name: HugoBuildJSONContent
           Actions:
@@ -250,8 +284,8 @@ Resources:
                   Ref: buildContent
               InputArtifacts:
                 - Name: ContentSource
-                # Directory is ${CODEBUILD_SRC_DIR_ThemeSource}
-                - Name: ThemeSource
+                # Directory is ${CODEBUILD_SRC_DIR_Theme}
+                - Name: Theme
               # We don't have to copy the json to an s3 bucket,
               # we can simply pass it on to the next build step
               # as an output artifact:
@@ -278,6 +312,27 @@ Resources:
                 # Directory is ${CODEBUILD_SRC_DIR_JSONContent}
                 - Name: JSONContent
 
+  buildTheme:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      ServiceRole:
+        Fn::GetAtt:
+          - buildRole
+          - Arn
+      Artifacts:
+        Name: Theme
+        Type: S3
+        Location:
+          Ref: artifactBucket
+      Environment:
+        Type: ARM_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/amazonlinux2-aarch64-standard:3.0
+      Source:
+        Type: GITHUB
+        Location:
+          Fn::Sub: https://github.com/${themeGitHubUser}/${themeGitHubRepo}
+
   buildContent:
     Type: AWS::CodeBuild::Project
     Properties:
@@ -300,7 +355,8 @@ Resources:
               Ref: jsonBucket
       Source:
         Type: CODECOMMIT
-        Location: https://git-codecommit.us-east-1.amazonaws.com/v1/repos/endgameviable-content
+        Location:
+          Fn::Sub: https://git-codecommit.${AWS::Region}.amazonaws.com/v1/repos/${contentRepo}
 
   buildDatabase:
     Type: AWS::CodeBuild::Project
@@ -326,7 +382,8 @@ Resources:
               Ref: searchTable
       Source:
         Type: GITHUB
-        Location: https://github.com/endgameviable/endgameviable-dbsync
+        Location:
+          Fn::Sub: https://github.com/${dbsyncGitHubUser}/${dbsyncGitHubRepo}
 
   buildNotification:
     Type: AWS::CodeStarNotifications::NotificationRule
